@@ -1,15 +1,17 @@
 /**
  * MarathonRatingsService - Main service that replaces the external rating calculation API calls.
- * 
+ *
  * This service loads marathon match data from PostgreSQL via Prisma,
  * runs the Qubits rating algorithm locally, and persists results back to the database.
- * 
+ *
  * Replaces: HTTP POST to /ratings/mm/calculate, /ratings/coders/load, /ratings/mm/load
  */
 
-import logger from '../common/logger';
+import { createLogger } from '../common/logger';
 import { prisma } from '../common/prismaClient';
 import { CoderRating, processMarathonRatings } from '../libs/algorithm/AlgorithmQubits';
+
+const logger = createLogger('MarathonRatingsService');
 
 /**
  * Load coder data for a given round from the database.
@@ -18,50 +20,35 @@ import { CoderRating, processMarathonRatings } from '../libs/algorithm/Algorithm
 async function loadCoderData(roundId: number): Promise<CoderRating[]> {
   logger.info(`Loading coder data for round ${roundId}`);
 
-  // Get all coders who participated in the round and haven't been rated yet
   const results = await prisma.long_comp_result.findMany({
     where: {
       round_id: roundId,
-      rated_ind: 0,
       attended: { in: ['Y', 'y'] },
+      new_rating: null,
+      new_vol: null,
     },
     select: {
       coder_id: true,
       system_point_total: true,
-      new_rating: true,
-      new_vol: true,
-      old_rating: true,
-      old_vol: true,
-      num_ratings: true,
     },
   });
 
   logger.info(`Found ${results.length} coders for round ${roundId}`);
 
-  // Map database results to CoderRating objects
-  const coders: CoderRating[] = results.map((r) => ({
-    coderId: r.coder_id,
-    rating: r.old_rating ?? 0,
-    volatility: r.old_vol ?? 0,
-    numRatings: r.num_ratings ?? 0,
-    score: Number(r.system_point_total) || 0,
-    rank: 0,
-  }));
+  const coders: CoderRating[] = [];
 
-  // Load existing algo_rating data for established coders
-  for (const coder of coders) {
+  for (const r of results) {
     const algoRating = await prisma.algo_rating.findFirst({
-      where: {
-        coder_id: coder.coderId,
-        algo_rating_type_id: 3, // Marathon Match type
-      },
+      where: { coder_id: r.coder_id, algo_rating_type_id: 3 },
     });
 
-    if (algoRating) {
-      coder.rating = algoRating.rating ?? coder.rating;
-      coder.volatility = algoRating.vol ?? coder.volatility;
-      coder.numRatings = algoRating.num_ratings ?? coder.numRatings;
-    }
+    coders.push({
+      coderId: r.coder_id,
+      rating: algoRating?.rating ?? 0,
+      volatility: algoRating?.vol ?? 0,
+      numRatings: algoRating?.num_ratings ?? 0,
+      score: Number(r.system_point_total) || 0,
+    });
   }
 
   return coders;
@@ -69,44 +56,40 @@ async function loadCoderData(roundId: number): Promise<CoderRating[]> {
 
 /**
  * Persist calculated ratings back to the database.
- * Replaces MarathonDataPersistor from Java service.
+ * Matches MarathonDataPersistor from Java service.
  */
 async function persistRatings(roundId: number, coders: CoderRating[]): Promise<void> {
   logger.info(`Persisting ratings for ${coders.length} coders in round ${roundId}`);
 
   for (const coder of coders) {
-    // Update long_comp_result with new ratings
+    const newRating = coder.newRating ?? coder.rating;
+    const newVol = coder.newVolatility ?? coder.volatility;
+
+    // Update long_comp_result (matches Java: set old_rating from algo_rating, then new)
+    const existingAlgo = await prisma.algo_rating.findFirst({
+      where: { coder_id: coder.coderId, algo_rating_type_id: 3 },
+    });
+
     await prisma.long_comp_result.updateMany({
-      where: {
-        round_id: roundId,
-        coder_id: coder.coderId,
-      },
+      where: { round_id: roundId, coder_id: coder.coderId },
       data: {
-        new_rating: coder.newRating ?? coder.rating,
-        new_vol: coder.newVolatility ?? coder.volatility,
         rated_ind: 1,
-        num_ratings: (coder.numRatings || 0) + 1,
+        old_rating: existingAlgo?.rating ?? null,
+        old_vol: existingAlgo?.vol ?? null,
+        new_rating: newRating,
+        new_vol: newVol,
       },
     });
 
-    // Upsert algo_rating
-    const existingAlgoRating = await prisma.algo_rating.findFirst({
-      where: {
-        coder_id: coder.coderId,
-        algo_rating_type_id: 3,
-      },
-    });
-
-    if (existingAlgoRating) {
+    // Upsert algo_rating (matches Java: update or insert)
+    if (existingAlgo) {
       await prisma.algo_rating.updateMany({
-        where: {
-          coder_id: coder.coderId,
-          algo_rating_type_id: 3,
-        },
+        where: { coder_id: coder.coderId, algo_rating_type_id: 3 },
         data: {
-          rating: coder.newRating ?? coder.rating,
-          vol: coder.newVolatility ?? coder.volatility,
-          num_ratings: (coder.numRatings || 0) + 1,
+          rating: newRating,
+          vol: newVol,
+          round_id: roundId,
+          num_ratings: { increment: 1 },
           last_rated_round_id: roundId,
         },
       });
@@ -115,36 +98,16 @@ async function persistRatings(roundId: number, coders: CoderRating[]): Promise<v
         data: {
           coder_id: coder.coderId,
           algo_rating_type_id: 3,
-          rating: coder.newRating ?? coder.rating,
-          vol: coder.newVolatility ?? coder.volatility,
+          rating: newRating,
+          vol: newVol,
           num_ratings: 1,
-          last_rated_round_id: roundId,
-          highest_rating: coder.newRating ?? coder.rating,
-          lowest_rating: coder.newRating ?? coder.rating,
+          round_id: roundId,
+          highest_rating: newRating,
+          lowest_rating: newRating,
           first_rated_round_id: roundId,
+          last_rated_round_id: roundId,
         },
       });
-    }
-
-    // Update highest/lowest rating
-    if (existingAlgoRating) {
-      const newRating = coder.newRating ?? coder.rating;
-      const updates: any = {};
-      if (newRating > (existingAlgoRating.highest_rating ?? 0)) {
-        updates.highest_rating = newRating;
-      }
-      if (newRating < (existingAlgoRating.lowest_rating ?? 9999)) {
-        updates.lowest_rating = newRating;
-      }
-      if (Object.keys(updates).length > 0) {
-        await prisma.algo_rating.updateMany({
-          where: {
-            coder_id: coder.coderId,
-            algo_rating_type_id: 3,
-          },
-          data: updates,
-        });
-      }
     }
   }
 
@@ -165,18 +128,14 @@ export async function calculateMarathonRatings(roundId: number): Promise<void> {
   logger.info(`Starting marathon rating calculation for round ${roundId}`);
 
   try {
-    // Step 1: Load coder data from PostgreSQL
     const coders = await loadCoderData(roundId);
 
     if (coders.length === 0) {
-      logger.info(`No coders found for round ${roundId}. Skipping calculation.`);
+      logger.info(`No unrated coders found for round ${roundId}. Skipping.`);
       return;
     }
 
-    // Step 2: Run the Qubits rating algorithm
     const ratedCoders = processMarathonRatings(coders);
-
-    // Step 3: Persist results back to PostgreSQL
     await persistRatings(roundId, ratedCoders);
 
     logger.info(`Marathon rating calculation completed for round ${roundId}`);
@@ -188,21 +147,14 @@ export async function calculateMarathonRatings(roundId: number): Promise<void> {
 
 /**
  * Load marathon ratings data (replaces /ratings/mm/load API call).
- * After calculation, update derived tables if needed.
  */
 export async function loadMarathonRatings(roundId: number): Promise<void> {
-  logger.info(`Loading marathon ratings for round ${roundId}`);
-  // The ratings are already persisted by calculateMarathonRatings.
-  // This function exists for backward compatibility with the event flow.
-  // Additional post-processing can be added here if needed.
-  logger.info(`Marathon ratings loaded for round ${roundId}`);
+  logger.info(`Loading marathon ratings for round ${roundId} (handled by calculateMarathonRatings)`);
 }
 
 /**
  * Load coder ratings (replaces /ratings/coders/load API call).
  */
 export async function loadCoderRatings(): Promise<void> {
-  logger.info('Loading coder ratings (no-op - handled by calculateMarathonRatings)');
-  // Coder ratings are already updated during the calculation phase.
-  // This function exists for backward compatibility.
+  logger.info('Loading coder ratings (handled by calculateMarathonRatings)');
 }

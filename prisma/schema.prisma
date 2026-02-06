@@ -1,0 +1,55 @@
+// Prisma schema for Member Profile Processor
+// PostgreSQL backend for rating calculation
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model round {
+  round_id  Int @id
+  rated_ind Int @default(0)
+
+  @@map("round")
+}
+
+model long_comp_result {
+  id                 Int      @id @default(autoincrement())
+  round_id           Int
+  coder_id           Int
+  attended           String?  @db.VarChar(1)
+  system_point_total Decimal? @db.Decimal(14, 2)
+  old_rating         Int?
+  old_vol            Int?
+  new_rating         Int?
+  new_vol            Int?
+  rated_ind          Int      @default(0)
+  num_ratings        Int      @default(0)
+
+  @@unique([round_id, coder_id])
+  @@index([round_id])
+  @@index([coder_id])
+  @@map("long_comp_result")
+}
+
+model algo_rating {
+  id                   Int  @id @default(autoincrement())
+  coder_id             Int
+  algo_rating_type_id  Int
+  rating               Int? @default(0)
+  vol                  Int? @default(0)
+  num_ratings          Int  @default(0)
+  round_id             Int?
+  highest_rating       Int?
+  lowest_rating        Int?
+  first_rated_round_id Int?
+  last_rated_round_id  Int?
+
+  @@unique([coder_id, algo_rating_type_id])
+  @@index([coder_id])
+  @@map("algo_rating")
+}

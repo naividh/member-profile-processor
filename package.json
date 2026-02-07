@@ -29,7 +29,6 @@
           "no-kafka": "^3.4.3",
           "superagent": "^8.0.3",
           "superagent-prefix": "0.0.2",
-          "tc-core-library-js": "appirio-tech/tc-core-library-js.git#v2.6.4",
           "topcoder-healthcheck-dropin": "^1.0.3",
           "winston": "^3.8.2"
     },

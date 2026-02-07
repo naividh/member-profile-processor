@@ -11,11 +11,10 @@
  * is now performed locally using the ported Qubits algorithm.
  */
 
-import * as _ from 'lodash';
 import { createLogger } from '../common/logger';
 import { prisma } from '../common/prismaClient';
 import { getSubmissions, getFinalSubmissions } from '../common/helper';
-import { CoderRating, processMarathonRatings } from '../libs/algorithm/AlgorithmQubits';
+import { CoderRating } from '../libs/algorithm/AlgorithmQubits';
 
 const logger = createLogger('MarathonRatingsService');
 

@@ -33,9 +33,9 @@ const dataHandler = (messageSet: any[], topic: string, partition: number) =>
   )
 
 function check(): boolean {
-  if (!consumer.client?.initialBrokers?.length) return false
-  let connected = true
-  consumer.client.initialBrokers.forEach((conn: any) => { connected = conn.connected && connected })
+  if (!(consumer as any).client?.initialBrokers?.length) return false
+  let connected = true;
+  (consumer as any).client.initialBrokers.forEach((conn: any) => { connected = conn.connected && connected })
   return connected
 }
 

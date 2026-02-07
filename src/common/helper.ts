@@ -59,7 +59,7 @@ export async function getM2Mtoken(): Promise<string> {
       const data: any = await response.json();
       cachedToken = data.access_token;
       tokenExpiry = now + cacheTime;
-      return cachedToken!;
+      return cachedToken as string;
     } catch (error) {
       logger.error(`Failed to get M2M token: ${error}`);
       throw error;
@@ -120,7 +120,7 @@ export async function getFinalSubmissions(submissions: any[]): Promise<any[]> {
     const memberSubmissions = _.filter(submissions, { memberId });
     const sortedSubs = _.sortBy(memberSubmissions, [(i: any) => new Date(i.created)]);
     const last = _.last(sortedSubs);
-    if (last && last.hasOwnProperty('reviewSummation')) {
+    if (last && Object.prototype.hasOwnProperty.call(last, 'reviewSummation')) {
       latestSubmissions.push(last);
     }
   });

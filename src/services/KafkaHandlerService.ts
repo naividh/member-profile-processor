@@ -11,7 +11,7 @@
 import * as config from 'config';
 import * as _ from 'lodash';
 import { createLogger } from '../common/logger';
-import { getChallengeDetails, getSubmissions, getFinalSubmissions } from '../common/helper';
+import { getChallengeDetails } from '../common/helper';
 import {
   calculate,
   loadRatings,

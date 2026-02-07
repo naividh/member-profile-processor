@@ -2,6 +2,7 @@
 CREATE TABLE "round" (
       "round_id" INTEGER NOT NULL,
       "rated_ind" INTEGER NOT NULL DEFAULT 0,
+          "contest_id" INTEGER,
       CONSTRAINT "round_pkey" PRIMARY KEY ("round_id")
   );
 

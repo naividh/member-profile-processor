@@ -1,61 +1,85 @@
 /**
- * KafkaHandlerService - Updated Kafka message handler.
+ * KafkaHandlerService - Kafka message handler.
  *
- * Replaces the old helper.js logic that called external API endpoints
- * with direct local function calls to MarathonRatingsService.
+ * Preserves the original routing logic:
+ *   - KAFKA_AUTOPILOT_NOTIFICATIONS_TOPIC: review phase end -> marathon_match check -> calculate
+ *   - KAFKA_RATING_SERVICE_TOPIC: event-driven sequencing (calculate -> loadCoders -> loadRatings)
+ *
+ * Rating calculation is now performed locally instead of calling the external API.
  */
 
 import * as config from 'config';
+import * as _ from 'lodash';
 import { createLogger } from '../common/logger';
+import { getChallengeDetails, getSubmissions, getFinalSubmissions } from '../common/helper';
 import {
-  calculateMarathonRatings,
-  loadMarathonRatings,
-  loadCoderRatings,
+  calculate,
+  loadRatings,
+  loadCoders,
 } from './MarathonRatingsService';
 
 const logger = createLogger('KafkaHandler');
 
-const MARATHON_TOPIC = config.has('MARATHON_RATING_TOPIC')
-  ? (config.get('MARATHON_RATING_TOPIC') as string)
-  : 'marathon.rating.calculate';
-const ALGORITHM_TOPIC = config.has('AGORITHM_RATING_TOPIC')
-  ? (config.get('AGORITHM_RATING_TOPIC') as string)
-  : 'algorithm.rating.calculate';
-
 /**
  * Handle an incoming Kafka message.
  *
- * Called from app.ts as:
- *   KafkaHandlerService.handle(messageJSON)
- *
- * The messageJSON is the full envelope; topic is derived from the payload
- * or passed separately by the old processor. We accept either shape.
+ * Mirrors the original KafkaHandlerService.js switch/case logic exactly.
  */
-export async function handle(messageJSON: any): Promise<void> {
-  const topic: string = messageJSON.topic || '';
-  const payload = messageJSON.payload || messageJSON;
-  const roundId: number | undefined =
-    payload.roundId || payload.round_id || messageJSON.roundId;
+export async function handle(message: any): Promise<void> {
+  const topic: string = message.topic || '';
 
-  logger.info(`Handling message – topic: ${topic}, roundId: ${roundId}`);
+  switch (topic) {
+    // ---------------------------------------------------------------
+    // Autopilot notifications — review phase end triggers MM rating
+    // ---------------------------------------------------------------
+    case config.get('KAFKA_AUTOPILOT_NOTIFICATIONS_TOPIC') as string: {
+      const payload = message.payload || {};
 
-  if (!roundId) {
-    logger.error('Message missing roundId – skipping');
-    return;
-  }
+      if (
+        payload.phaseTypeName &&
+        payload.phaseTypeName.toLowerCase() === 'review' &&
+        payload.state &&
+        payload.state.toLowerCase() === 'end'
+      ) {
+        // Look up challenge details from V5 API
+        const challengeDetails = await getChallengeDetails({
+          legacyId: payload.projectId,
+        });
 
-  try {
-    if (topic === MARATHON_TOPIC || topic === ALGORITHM_TOPIC || topic === '') {
-      // Both marathon and algorithm ratings follow the same flow
-      await calculateMarathonRatings(roundId);
-      await loadMarathonRatings(roundId);
-      await loadCoderRatings();
-      logger.info(`Rating processing complete for round ${roundId}`);
-    } else {
-      logger.warn(`Unknown topic: ${topic}`);
+        if (
+          challengeDetails &&
+          _.get(challengeDetails, 'legacy.subTrack', '').toLowerCase() === 'marathon_match'
+        ) {
+          await calculate(challengeDetails.id, challengeDetails.legacyId);
+        }
+      }
+      break;
     }
-  } catch (error) {
-    logger.error(`Error handling message: ${error}`);
-    throw error;
+
+    // ---------------------------------------------------------------
+    // Rating-service events — sequencing: calculate -> loadCoders -> loadRatings
+    // ---------------------------------------------------------------
+    case config.get('KAFKA_RATING_SERVICE_TOPIC') as string: {
+      if (message.originator === 'rating.calculation.service') {
+        const payload = message.payload || {};
+
+        if (
+          payload.event === 'RATINGS_CALCULATION' &&
+          payload.status === 'SUCCESS'
+        ) {
+          await loadCoders(payload.roundId);
+        } else if (
+          payload.event === 'LOAD_CODERS' &&
+          payload.status === 'SUCCESS'
+        ) {
+          await loadRatings(payload.roundId);
+        }
+      }
+      break;
+    }
+
+    default:
+      logger.warn(`Unhandled topic: ${topic}`);
+      break;
   }
 }

@@ -13,6 +13,7 @@ datasource db {
 model round {
   round_id  Int @id
   rated_ind Int @default(0)
+    contest_id Int?
 
   @@map("round")
 }

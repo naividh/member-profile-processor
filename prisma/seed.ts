@@ -15,7 +15,7 @@ async function main() {
   await prisma.round.upsert({
     where: { round_id: 10001 },
     update: {},
-    create: { round_id: 10001, rated_ind: 0 },
+    create: { round_id: 10001, rated_ind: 0, contest_id: 30001 },
   });
 
   // Create test coders with results for the round

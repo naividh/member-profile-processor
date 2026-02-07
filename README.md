@@ -21,14 +21,20 @@ This is the enhanced member-profile-processor that integrates the marathon match
 
 ## Architecture
 
-The processor subscribes to Kafka topics for marathon/algorithm rating events. When a message arrives:
+The processor subscribes to two Kafka topics and preserves the original event routing:
 
-1. `KafkaHandlerService` routes the message based on topic
-2. `MarathonRatingsService.calculateMarathonRatings(roundId)` runs locally:
-   - Loads coder data from PostgreSQL via Prisma (`long_comp_result`, `algo_rating`)
-   - Runs the Qubits rating algorithm (`AlgorithmQubits.ts`)
-   - Persists new ratings back to PostgreSQL (mirrors `MarathonDataPersistor` logic)
-3. No external API calls are made
+**Autopilot Notifications** (`KAFKA_AUTOPILOT_NOTIFICATIONS_TOPIC`):
+- Triggered when a review phase ends (`phaseTypeName=review`, `state=end`)
+- Looks up challenge via V5 API to check if it's a `marathon_match` subTrack
+- If so, calls `calculate(challengeId, legacyId)` which:
+  - Resolves `roundId` from `legacyId` (contest_id) via PostgreSQL
+    - Pre-processes attendance flags using V5 submission data
+      - Runs the Qubits rating algorithm locally (replaces `POST /ratings/mm/calculate`)
+      
+      **Rating Service Events** (`KAFKA_RATING_SERVICE_TOPIC`):
+      - Sequences: `RATINGS_CALCULATION` success → `loadCoders()` → `LOAD_CODERS` success → `loadRatings()`
+      - `loadCoders` and `loadRatings` are out of scope for this challenge (stubs only)
+      3. No external API calls are made
 
 ## Project Structure
 
@@ -207,5 +213,7 @@ The Qubits algorithm (`AlgorithmQubits.ts`) is faithfully ported from `com.topco
 The `processMarathonRatings` function mirrors `MarathonRatingProcess.runProcess()`:
 - First runs the algorithm on ALL coders (provisional run)
 - Keeps only first-timers' results from the provisional run
+- **Persists first-timers immediately** (before non-provisional run)
 - Then runs the algorithm on experienced coders only (non-provisional run)
-- Persists both sets of results
+- Persists experienced coders' results
+
